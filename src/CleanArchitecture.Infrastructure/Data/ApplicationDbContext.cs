@@ -1,14 +1,28 @@
 using CleanArchitecture.Domain.Common;
 using CleanArchitecture.Domain.Entities;
 using CleanArchitecture.Domain.Interfaces;
+using CleanArchitecture.Application.Common.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
 namespace CleanArchitecture.Infrastructure.Data;
 
 public class ApplicationDbContext : DbContext, IUnitOfWork
 {
+    private readonly ICurrentUserService _currentUserService;
+
     public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
-        : base(options) { }
+        : base(options)
+    {
+        _currentUserService = new DefaultCurrentUserService();
+    }
+
+    public ApplicationDbContext(
+        DbContextOptions<ApplicationDbContext> options,
+        ICurrentUserService currentUserService)
+        : base(options)
+    {
+        _currentUserService = currentUserService;
+    }
 
     public DbSet<Product> Products => Set<Product>();
 
@@ -26,9 +40,11 @@ public class ApplicationDbContext : DbContext, IUnitOfWork
             {
                 case EntityState.Added:
                     entry.Entity.CreatedAt = DateTimeOffset.UtcNow;
+                    entry.Entity.CreatedBy = _currentUserService.UserId;
                     break;
                 case EntityState.Modified:
                     entry.Entity.LastModifiedAt = DateTimeOffset.UtcNow;
+                    entry.Entity.LastModifiedBy = _currentUserService.UserId;
                     break;
             }
         }
@@ -38,4 +54,9 @@ public class ApplicationDbContext : DbContext, IUnitOfWork
 
     // IDisposable is already implemented by DbContext
     void IDisposable.Dispose() => base.Dispose();
+
+    private sealed class DefaultCurrentUserService : ICurrentUserService
+    {
+        public string UserId => "system";
+    }
 }

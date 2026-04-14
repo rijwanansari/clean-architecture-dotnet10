@@ -1,7 +1,8 @@
 using CleanArchitecture.Application.Common.Exceptions;
 using CleanArchitecture.Domain.Exceptions;
 using System.Net;
-using System.Text.Json;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace CleanArchitecture.WebApi.Middleware;
 
@@ -24,38 +25,60 @@ public sealed class ExceptionHandlingMiddleware
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Unhandled exception: {Message}", ex.Message);
+            _logger.LogError(ex,
+                "Unhandled exception for {Method} {Path}. TraceId: {TraceId}",
+                context.Request.Method,
+                context.Request.Path,
+                context.TraceIdentifier);
             await HandleExceptionAsync(context, ex);
         }
     }
 
     private static async Task HandleExceptionAsync(HttpContext context, Exception exception)
     {
-        var (statusCode, title, detail) = exception switch
+        var problemDetails = new ProblemDetails
         {
-            ValidationException ve => (
-                HttpStatusCode.BadRequest,
-                "Validation Failure",
-                (object)ve.Errors),
-            NotFoundException => (
-                HttpStatusCode.NotFound,
-                "Resource Not Found",
-                (object)new { message = exception.Message }),
-            DomainException => (
-                HttpStatusCode.UnprocessableEntity,
-                "Domain Rule Violation",
-                (object)new { message = exception.Message }),
-            _ => (
-                HttpStatusCode.InternalServerError,
-                "An unexpected error occurred",
-                (object)new { message = "Please contact support or try again later." })
+            Instance = context.Request.Path
         };
 
-        context.Response.StatusCode = (int)statusCode;
-        context.Response.ContentType = "application/json";
+        switch (exception)
+        {
+            case ValidationException validationException:
+                problemDetails.Status = (int)HttpStatusCode.BadRequest;
+                problemDetails.Title = "Validation Failure";
+                problemDetails.Detail = "One or more validation errors occurred.";
+                problemDetails.Extensions["errors"] = validationException.Errors;
+                break;
+            case NotFoundException:
+                problemDetails.Status = (int)HttpStatusCode.NotFound;
+                problemDetails.Title = "Resource Not Found";
+                problemDetails.Detail = exception.Message;
+                break;
+            case DomainException:
+                problemDetails.Status = (int)HttpStatusCode.UnprocessableEntity;
+                problemDetails.Title = "Domain Rule Violation";
+                problemDetails.Detail = exception.Message;
+                break;
+            case DbUpdateConcurrencyException:
+                problemDetails.Status = (int)HttpStatusCode.Conflict;
+                problemDetails.Title = "Concurrency Conflict";
+                problemDetails.Detail = "The resource was modified by another request. Refresh and retry.";
+                break;
+            default:
+                problemDetails.Status = (int)HttpStatusCode.InternalServerError;
+                problemDetails.Title = "An unexpected error occurred";
+                problemDetails.Detail = "Please contact support or try again later.";
+                break;
+        }
 
-        var response = new { title, detail, status = statusCode };
-        var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-        await context.Response.WriteAsJsonAsync(response, options);
+        problemDetails.Type = $"https://httpstatuses.com/{problemDetails.Status}";
+
+        problemDetails.Extensions["traceId"] = context.TraceIdentifier;
+        problemDetails.Extensions["timestamp"] = DateTimeOffset.UtcNow;
+
+        context.Response.StatusCode = problemDetails.Status.Value;
+        context.Response.ContentType = "application/problem+json";
+
+        await context.Response.WriteAsJsonAsync(problemDetails);
     }
 }

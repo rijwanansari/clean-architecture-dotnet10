@@ -40,6 +40,9 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
         builder.Property(p => p.StockQuantity)
             .IsRequired();
 
+        builder.Property(p => p.RowVersion)
+            .IsRowVersion();
+
         builder.Property(p => p.CreatedAt)
             .IsRequired();
 
